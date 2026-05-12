@@ -67,48 +67,47 @@ def get_ai_analysis(query):
     Мова: українська.
     """
     
-    try:
-        # Спробуємо стандартну назву моделі
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Спроба виклику
-        response = model.generate_content(prompt)
-        
-        if not response:
-            return None
+    # Список моделей для спроби (від найновіших до старіших)
+    model_candidates = [
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.0-pro',
+        'gemini-pro'
+    ]
+    
+    last_error = ""
+    
+    for model_name in model_candidates:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
             
-        # Очищення тексту
-        res_text = response.text
-        if not res_text:
-            return None
-            
-        clean_text = re.sub(r'```json\s?|\s?```', '', res_text).strip()
-        return json.loads(clean_text)
-    except Exception as e:
-        err_msg = str(e)
-        if "404" in err_msg or "not found" in err_msg.lower():
-            st.error(f"⚠️ Модель не знайдена (404).")
-            with st.expander("🔍 Відлагодити доступні моделі"):
-                try:
-                    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                    st.write("Список доступних моделей у вашому API ключі:")
-                    st.write(models)
-                    st.info("Якщо ви бачите 'gemini-1.5-flash-latest' або інші назви, спробуйте їх.")
-                except Exception as list_err:
-                    st.write(f"Не вдалося отримати список моделей: {list_err}")
-            
-            # Спроба використати завідомо існуючу стару модель
-            try:
-                backup_model = genai.GenerativeModel('gemini-pro')
-                response = backup_model.generate_content(prompt)
+            if response and response.text:
                 res_text = response.text
                 clean_text = re.sub(r'```json\s?|\s?```', '', res_text).strip()
                 return json.loads(clean_text)
+        except Exception as e:
+            last_error = str(e)
+            # Якщо це 404, пробуємо наступну модель
+            if "404" in last_error or "not found" in last_error.lower():
+                continue
+            else:
+                # Якщо інша помилка (наприклад, ключ), зупиняємось
+                break
+
+    # Якщо всі моделі не спрацювали
+    if "404" in last_error or "not found" in last_error.lower():
+        st.error(f"⚠️ Модель не знайдена в вашому регіоні/акаунті.")
+        with st.expander("🔍 Переглянути доступні моделі"):
+            try:
+                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                st.write(models)
             except:
-                pass
-        
-        st.error(f"⚠️ Помилка Gemini API: {err_msg}")
-        return None
+                st.write("Не вдалося отримати список моделей.")
+    else:
+        st.error(f"⚠️ Помилка Gemini API: {last_error}")
+    
+    return None
 
 # --- UI ---
 st.set_page_config(page_title="Аналізатор рішень", page_icon="🧠")
