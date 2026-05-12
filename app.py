@@ -14,10 +14,8 @@ api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        # Використовуємо повну назву моделі для надійності
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
     except Exception as e:
-        st.error(f"Помилка ініціалізації моделі: {e}")
+        st.error(f"Помилка конфігурації API: {e}")
         api_key = None
 else:
     api_key = None
@@ -60,41 +58,37 @@ def export_to_docx(decision):
 
 # --- Логіка AI ---
 def get_ai_analysis(query):
-    prompt = f"""
-    Проаналізуй наступне рішення або дилему: "{query}"
-    Надай структуровану відповідь українською мовою.
+    # Додамо логування для відладки (видно в логах Streamlit)
+    print(f"DEBUG: Processing query: {query[:50]}")
     
-    ВІДПОВІДЬ МАЄ БУТИ ТІЛЬКИ В ФОРМАТІ JSON З ТАКОЮ СТРУКТУРОЮ:
-    {{
-      "prosCons": {{
-        "pros": ["аргумент за 1", "аргумент за 2"],
-        "cons": ["аргумент проти 1", "аргумент проти 2"]
-      }},
-      "swot": {{
-        "strengths": ["сила 1"],
-        "weaknesses": ["слабкість 1"],
-        "opportunities": ["можливість 1"],
-        "threats": ["ризик 1"]
-      }},
-      "summary": "Фінальна порада."
-    }}
+    prompt = f"""
+    Проаналізуй рішення: "{query}"
+    Надай JSON: {{"prosCons": {{"pros": [], "cons": []}}, "swot": {{"strengths": [], "weaknesses": [], "opportunities": [], "threats": []}}, "summary": ""}}
+    Мова: українська.
     """
     
     try:
-        # Використовуємо простіший виклик без додаткових конфігів, 
-        # які можуть викликати InvalidArgument в старих версіях SDK
+        # Ініціалізація моделі безпосередньо перед використанням
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Спроба виклику
         response = model.generate_content(prompt)
         
-        if not response or not response.text:
+        if not response:
             return None
             
-        # Очищення від можливих markdown-тегів
-        clean_text = re.sub(r'```json\s?|\s?```', '', response.text).strip()
+        # Очищення тексту
+        res_text = response.text
+        if not res_text:
+            return None
+            
+        clean_text = re.sub(r'```json\s?|\s?```', '', res_text).strip()
         return json.loads(clean_text)
     except Exception as e:
-        st.error(f"⚠️ Помилка Gemini API: {str(e)}")
-        # Виводимо деталі в лог, якщо це можливо
-        print(f"Full error: {e}")
+        err_msg = str(e)
+        st.error(f"⚠️ Помилка Gemini API: {err_msg}")
+        if "InvalidArgument" in err_msg:
+            st.info("Порада: Спробуйте видалити та заново додати GEMINI_API_KEY у Secrets або перевірте, чи не містить він зайвих пробілів.")
         return None
 
 # --- UI ---
