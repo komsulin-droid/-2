@@ -2,20 +2,23 @@ import streamlit as st
 import google.generativeai as genai
 import json
 import os
+import re
 from datetime import datetime
 from io import BytesIO
 from docx import Document
 
 # --- Налаштування Gemini ---
-# Перевіряємо різні варіанти назви ключа. 
-# У Streamlit Secrets зазвичай додають GEMINI_API_KEY.
+# Отримання ключа з різних джерел
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 if api_key:
-    # Важливо: конфігуруємо API перед використанням
-    genai.configure(api_key=api_key)
-    # Використовуємо modern flash модель
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=api_key)
+        # Використовуємо повну назву моделі для надійності
+        model = genai.GenerativeModel('models/gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Помилка ініціалізації моделі: {e}")
+        api_key = None
 else:
     api_key = None
 
@@ -30,25 +33,26 @@ def export_to_docx(decision):
     
     doc.add_heading('Переваги та Недоліки', level=1)
     doc.add_heading('Переваги:', level=2)
-    for p in decision['analysis']['prosCons']['pros']:
+    for p in decision['analysis'].get('prosCons', {}).get('pros', []):
         doc.add_paragraph(f"• {p}")
     
     doc.add_heading('Недоліки:', level=2)
-    for c in decision['analysis']['prosCons']['cons']:
+    for c in decision['analysis'].get('prosCons', {}).get('cons', []):
         doc.add_paragraph(f"• {c}")
     
     doc.add_heading('SWOT Аналіз', level=1)
-    swot = decision['analysis']['swot']
-    for label, items in [("Сильні сторони (Strengths)", swot['strengths']), 
-                         ("Слабкі сторони (Weaknesses)", swot['weaknesses']), 
-                         ("Можливості (Opportunities)", swot['opportunities']), 
-                         ("Загрози (Threats)", swot['threats'])]:
+    swot = decision['analysis'].get('swot', {})
+    for label, key in [("Сильні сторони (Strengths)", 'strengths'), 
+                         ("Слабкі сторони (Weaknesses)", 'weaknesses'), 
+                         ("Можливості (Opportunities)", 'opportunities'), 
+                         ("Загрози (Threats)", 'threats')]:
         doc.add_heading(label, level=2)
+        items = swot.get(key, [])
         for item in items:
             doc.add_paragraph(f"• {item}")
             
     doc.add_heading('Підсумок та рекомендація', level=1)
-    doc.add_paragraph(decision['analysis']['summary'])
+    doc.add_paragraph(decision['analysis'].get('summary', ''))
     
     bio = BytesIO()
     doc.save(bio)
@@ -56,139 +60,106 @@ def export_to_docx(decision):
 
 # --- Логіка AI ---
 def get_ai_analysis(query):
-    # Промпт з чіткими інструкціями щодо JSON
     prompt = f"""
     Проаналізуй наступне рішення або дилему: "{query}"
     Надай структуровану відповідь українською мовою.
     
-    Формат відповіді має бути СУВОРИМ JSON з наступною структурою:
+    ВІДПОВІДЬ МАЄ БУТИ ТІЛЬКИ В ФОРМАТІ JSON З ТАКОЮ СТРУКТУРОЮ:
     {{
       "prosCons": {{
-        "pros": ["аргумент за 1", "аргумент за 2", "аргумент за 3"],
-        "cons": ["аргумент проти 1", "аргумент проти 2", "аргумент проти 3"]
+        "pros": ["аргумент за 1", "аргумент за 2"],
+        "cons": ["аргумент проти 1", "аргумент проти 2"]
       }},
       "swot": {{
-        "strengths": ["сила 1", "сила 2"],
-        "weaknesses": ["слабкість 1", "слабкість 2"],
+        "strengths": ["сила 1"],
+        "weaknesses": ["слабкість 1"],
         "opportunities": ["можливість 1"],
         "threats": ["ризик 1"]
       }},
-      "summary": "Короткий фінальний підсумок та рекомендація."
+      "summary": "Фінальна порада."
     }}
-    
-    Не додавай жодних пояснень поза JSON.
     """
     
     try:
-        # Використовуємо режим генерації JSON для надійності
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
+        # Використовуємо простіший виклик без додаткових конфігів, 
+        # які можуть викликати InvalidArgument в старих версіях SDK
+        response = model.generate_content(prompt)
         
-        if not response.text:
+        if not response or not response.text:
             return None
             
-        return json.loads(response.text)
+        # Очищення від можливих markdown-тегів
+        clean_text = re.sub(r'```json\s?|\s?```', '', response.text).strip()
+        return json.loads(clean_text)
     except Exception as e:
-        # Для налагодження у консолі Streamlit
-        st.error(f"Помилка аналізу: {str(e)}")
+        st.error(f"⚠️ Помилка Gemini API: {str(e)}")
+        # Виводимо деталі в лог, якщо це можливо
+        print(f"Full error: {e}")
         return None
 
-# --- UI Налаштування ---
-st.set_page_config(page_title="Аналізатор рішень", page_icon="🧠", layout="centered")
-
-# Стилізація
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stButton>button { border-radius: 10px; height: 3em; font-weight: bold; }
-    .stTextArea>div>div>textarea { border-radius: 15px; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- UI ---
+st.set_page_config(page_title="Аналізатор рішень", page_icon="🧠")
 
 if "history" not in st.session_state:
     st.session_state.history = []
 
 st.title("🧠 Аналізатор рішень")
-st.write("Ваш персональний ШІ-помічник для виваженого вибору.")
 
 if not api_key:
-    st.info("ℹ️ Потрібно налаштувати API ключ. Додайте `GEMINI_API_KEY` у Secrets вашого Streamlit додатку.")
+    st.warning("⚠️ Ключ API не знайдено. Переконайтеся, що ви додали `GEMINI_API_KEY` у розділ Settings -> Secrets вашого Streamlit Cloud.")
 else:
-    # Секція введення
-    with st.container():
-        query = st.text_area("Опишіть ваше рішення чи ситуацію:", height=100, placeholder="Наприклад: Чи варто мені переходити на фріланс зараз?")
-        
-        if st.button("Аналізувати ситуацію 🔍", use_container_width=True):
-            if query:
-                with st.spinner("ШІ аналізує варіанти..."):
-                    analysis_result = get_ai_analysis(query)
-                    if analysis_result:
-                        new_decision = {
-                            "query": query,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                            "analysis": analysis_result
-                        }
-                        st.session_state.history.insert(0, new_decision)
-                        st.success("Аналіз успішно завершено!")
-            else:
-                st.warning("Будь ласка, введіть опис ситуації.")
+    query_input = st.text_area("Яке рішення ви обмірковуєте?", height=120, placeholder="Наприклад: Чи варто прийняти пропозицію роботи в іншому місті?")
+    
+    if st.button("Проаналізувати за допомогою ШІ ✨", use_container_width=True):
+        if query_input:
+            with st.spinner("Зважуємо всі ризики та можливості..."):
+                res = get_ai_analysis(query_input)
+                if res:
+                    st.session_state.history.insert(0, {
+                        "query": query_input,
+                        "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                        "analysis": res
+                    })
+                    st.success("Готово!")
+                else:
+                    st.error("Не вдалося отримати аналіз. Спробуйте змінити запит або перевірте ключ.")
+        else:
+            st.info("Введіть текст запиту для початку.")
 
-    # Відображення поточного результату
     if st.session_state.history:
-        current = st.session_state.history[0]
-        
+        curr = st.session_state.history[0]
         st.divider()
-        st.header(f"Результат для: {current['query']}")
+        st.header(f"Аналіз: {curr['query']}")
         
-        # Експорт
-        docx_data = export_to_docx(current)
+        # Кнопки експорту
         st.download_button(
-            label="📄 Скачати повний звіт (.docx)",
-            data=docx_data,
-            file_name=f"decision_analysis_{datetime.now().strftime('%d_%m')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
+            "⬇️ Скачати звіт Word (.docx)",
+            data=export_to_docx(curr),
+            file_name="analiz_rishennya.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
-        # Tabs для зручності перегляду
-        tab1, tab2, tab3 = st.tabs(["📊 Плюси/Мінуси", "📐 SWOT-аналіз", "📝 Підсумок"])
         
-        with tab1:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.success("**Переваги**")
-                for p in current['analysis']['prosCons']['pros']:
-                    st.write(f"- {p}")
-            with col2:
-                st.error("**Недоліки**")
-                for c in current['analysis']['prosCons']['cons']:
-                    st.write(f"- {c}")
-                    
-        with tab2:
-            s1, s2 = st.columns(2)
-            s3, s4 = st.columns(2)
-            with s1:
-                st.info("**Strengths**\n" + "\n".join([f"- {x}" for x in current['analysis']['swot']['strengths']]))
-            with s2:
-                st.warning("**Weaknesses**\n" + "\n".join([f"- {x}" for x in current['analysis']['swot']['weaknesses']]))
-            with s3:
-                st.info("**Opportunities**\n" + "\n".join([f"- {x}" for x in current['analysis']['swot']['opportunities']]))
-            with s4:
-                st.error("**Threats**\n" + "\n".join([f"- {x}" for x in current['analysis']['swot']['threats']]))
-                
-        with tab3:
-            st.markdown(f"### Рекомендація\n> {current['analysis']['summary']}")
+        # Результати
+        p1, p2 = st.columns(2)
+        with p1:
+            st.success("✅ **Плюси**")
+            for p in curr['analysis']['prosCons']['pros']: st.write(f"• {p}")
+        with p2:
+            st.error("❌ **Мінуси**")
+            for c in curr['analysis']['prosCons']['cons']: st.write(f"• {c}")
+            
+        st.subheader("SWOT-аналіз")
+        s1, s2, s3, s4 = st.columns(4)
+        with s1: st.info("**S**\n" + "\n".join([f"- {x}" for x in curr['analysis']['swot']['strengths']]))
+        with s2: st.warning("**W**\n" + "\n".join([f"- {x}" for x in curr['analysis']['swot']['weaknesses']]))
+        with s3: st.info("**O**\n" + "\n".join([f"- {x}" for x in curr['analysis']['swot']['opportunities']]))
+        with s4: st.error("**T**\n" + "\n".join([f"- {x}" for x in curr['analysis']['swot']['threats']]))
+        
+        st.info(f"💡 **Підсумок:** {curr['analysis']['summary']}")
 
-# Бокова панель
-st.sidebar.title("📚 Історія аналізів")
-if not st.session_state.history:
-    st.sidebar.write("Історія поки порожня.")
-else:
-    for i, item in enumerate(st.session_state.history):
-        btn_label = f"{item['timestamp']}: {item['query'][:25]}..."
-        if st.sidebar.button(btn_label, key=f"hist_{i}"):
-            # Переміщуємо вибране на перше місце (трохи простовато, зате працює для Streamlit)
-            st.session_state.history.insert(0, st.session_state.history.pop(i))
-            st.rerun()
+# Sidebar
+st.sidebar.title("Історія")
+for i, h in enumerate(st.session_state.history):
+    if st.sidebar.button(f"{h['timestamp']}: {h['query'][:20]}...", key=f"h_{i}"):
+        st.session_state.history.insert(0, st.session_state.history.pop(i))
+        st.rerun()
