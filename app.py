@@ -68,7 +68,7 @@ def get_ai_analysis(query):
     """
     
     try:
-        # Ініціалізація моделі безпосередньо перед використанням
+        # Спробуємо стандартну назву моделі
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         # Спроба виклику
@@ -86,9 +86,28 @@ def get_ai_analysis(query):
         return json.loads(clean_text)
     except Exception as e:
         err_msg = str(e)
+        if "404" in err_msg or "not found" in err_msg.lower():
+            st.error(f"⚠️ Модель не знайдена (404).")
+            with st.expander("🔍 Відлагодити доступні моделі"):
+                try:
+                    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                    st.write("Список доступних моделей у вашому API ключі:")
+                    st.write(models)
+                    st.info("Якщо ви бачите 'gemini-1.5-flash-latest' або інші назви, спробуйте їх.")
+                except Exception as list_err:
+                    st.write(f"Не вдалося отримати список моделей: {list_err}")
+            
+            # Спроба використати завідомо існуючу стару модель
+            try:
+                backup_model = genai.GenerativeModel('gemini-pro')
+                response = backup_model.generate_content(prompt)
+                res_text = response.text
+                clean_text = re.sub(r'```json\s?|\s?```', '', res_text).strip()
+                return json.loads(clean_text)
+            except:
+                pass
+        
         st.error(f"⚠️ Помилка Gemini API: {err_msg}")
-        if "InvalidArgument" in err_msg:
-            st.info("Порада: Спробуйте видалити та заново додати GEMINI_API_KEY у Secrets або перевірте, чи не містить він зайвих пробілів.")
         return None
 
 # --- UI ---
